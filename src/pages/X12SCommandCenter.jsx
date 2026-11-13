@@ -40,12 +40,33 @@ export default function X12SCommandCenter(){
   const [data,setData]=useState(()=>{
     try {const s=localStorage.getItem('x12s-preview-state');return s?JSON.parse(s):EMPTY;} catch {return EMPTY;}
   });
+  const [liveStatus,setLiveStatus]=useState('local');
   const [tab,setTab]=useState('overall');
   const [channel,setChannel]=useState('MH');
   const [error,setError]=useState('');
   const [editing,setEditing]=useState(false);
   const [draft,setDraft]=useState({month:'November',channel:'MH',value:'',owner:'',asOf:''});
   useEffect(()=>{try{localStorage.setItem('x12s-preview-state',JSON.stringify(data))}catch{}},[data]);
+  // Protected read-only sync. API returns 503 until workload identity and server
+  // access controls are configured; never convert missing responses into zero.
+  useEffect(()=>{
+    let active=true;
+    async function refresh(){
+      try{
+        const response=await fetch('/api/dashboard',{credentials:'same-origin',cache:'no-store'});
+        if(!response.ok){if(active)setLiveStatus('local');return;}
+        const payload=await response.json();
+        if(active&&payload?.model==='X12S'&&payload.source==='verified-private-google-sheets'){
+          setData(payload);
+          setLiveStatus('live');
+        }
+      }catch{if(active)setLiveStatus('local');}
+    }
+    refresh();
+    const interval=setInterval(refresh,5*60*1000);
+    return()=>{active=false;clearInterval(interval);};
+  },[]);
+
   const reported=allConfirmedSO(data,'October'), nov=allConfirmedSO(data,'November');
   // Target gap below is DOCUMENTED-only, never labeled current confirmed remaining target.
   const known=total(['October','November'].flatMap(m=>Object.values(sMonth(data,m)).filter(hasNumber)));
@@ -64,7 +85,7 @@ export default function X12SCommandCenter(){
   const saveSales=()=>{const n=draft.value.trim()===''?null:Number(draft.value);if(n!==null&&(!Number.isFinite(n)||n<0)){setError('SO must be a nonnegative number, or blank for unreported.');return;}setData(d=>({...d,so:{...d.so,[draft.month]:{...d.so[draft.month],[draft.channel]:n}},dataAsOf:draft.asOf||d.dataAsOf}));setEditing(false);setError('')};
 
   return <div className="x12s-app"><header className="xheader"><div className="xheader-inner"><div><div className="xeyebrow">ECOVACS · ISRAEL · X12S ONLY</div><h1>Retail Business & MKT Investment Command Center</h1><p>Business results → retail execution → marketing support → weekly decisions</p></div><div className="xheader-actions"><label className="xbutton xbutton-light"><Upload size={15}/> Import private X12S data<input aria-label="Import X12S JSON" type="file" accept="application/json,.json" hidden onChange={importJSON}/></label><button className="xbutton xbutton-light" onClick={exportJSON}><Download size={15}/> Export updates</button></div></div></header>
-  <div className="xnav"><div className="xnav-inner">{[['overall','01 Overall · Plan vs Actual'],['channels','02 Retailer Deep Dive'],['decisions','03 Decisions & Actions']].map(([id,title])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{title}</button>)}<span className="xasof">Source as of: {dateLabel(data.dataAsOf)} · <b>Local preview, not live sync</b></span></div></div>
+  <div className="xnav"><div className="xnav-inner">{[['overall','01 Overall · Plan vs Actual'],['channels','02 Retailer Deep Dive'],['decisions','03 Decisions & Actions']].map(([id,title])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{title}</button>)}<span className="xasof">Source as of: {dateLabel(data.dataAsOf)} · <b>{liveStatus==='live'?'Protected Sheets sync · refresh every 5 min':'Local preview · private sync not enabled'}</b></span></div></div>
   {error&&<div className="xerror" role="alert">{error}</div>}
   <main className="xmain">
   {tab==='overall'&&<><div className="xsection-title"><div><h2>01 · Launch performance vs plan</h2><p>X12S-only. Teal: confirmed October · Blue: November plan · Grey: not reported.</p></div><Chip>700-unit goal: launch period; exact end date to confirm</Chip></div>

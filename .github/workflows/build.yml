@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - IL-X12S-dashboard
+      - feature/x12s-private-sheets-api
   workflow_dispatch:
 
 permissions:
