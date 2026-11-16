@@ -9,6 +9,8 @@
 const GOOGLE_STS = 'https://sts.googleapis.com/v1/token';
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 const CLOUD_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
+const PRODUCTION_ONLY = true;
+
 
 function cell(row, index) { return (row || [])[index] ?? null; }
 function num(value) {
@@ -18,6 +20,11 @@ function num(value) {
 }
 function str(value) { return value == null ? '' : String(value).trim(); }
 function assertEnvironment() {
+  // Only Production tokens are permitted by the Google OIDC provider condition.
+  // A Preview deployment must never accidentally consume a Production identity.
+  if (PRODUCTION_ONLY && process.env.VERCEL_ENV !== 'production') {
+    throw new Error('X12S live sync is restricted to Vercel Production');
+  }
   const vars = ['GOOGLE_WIF_AUDIENCE','GOOGLE_SERVICE_ACCOUNT_EMAIL','X12S_MASTER_SHEET_ID','X12S_AGENCY_SHEET_ID','VERCEL_OIDC_TOKEN'];
   const missing = vars.filter(key => !process.env[key]);
   if (missing.length) throw new Error('Missing server-side configuration: ' + missing.join(', '));
@@ -32,7 +39,9 @@ async function responseJSON(url, init) {
   try { return JSON.parse(raw); } catch { throw new Error('Unexpected Google API response'); }
 }
 async function googleAccessToken() {
-  // Requires Vercel OIDC token issuance and Google Cloud workload identity federation.
+  // VERCEL_OIDC_TOKEN is a runtime-injected system environment variable.
+  // Never create it manually in Vercel Settings and never store a static token.
+  // Requires Vercel OIDC issuance and Google Cloud workload identity federation.
   const form = new URLSearchParams({
     audience: process.env.GOOGLE_WIF_AUDIENCE,
     grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
@@ -93,13 +102,20 @@ function mapActivities(rows) {
     const verified=verification==='Verified'&&Boolean(proof);
     return {
       id:str(cell(row,0)),channel:str(cell(row,4)),category:str(cell(row,5)),
-      description:str(cell(row,6)),planStart:cell(row,7),planEnd:cell(row,8),
+      description:str(cell(row,6)),label:str(cell(row,6)),period:str(cell(row,2)),planStart:cell(row,7),planEnd:cell(row,8),
       plannedQty:num(cell(row,9)),deliveredQty:verified?num(cell(row,11)):null,
       status:verified?'Verified / Completed':submitted,
       executionStatus:submitted,verification,proof:proof||null,
       owner:cell(row,16),updatedAt:cell(row,17),blocker:cell(row,18)
     };
   });
+}
+function expenseMonth(value) {
+  const month = str(value).toLowerCase();
+  if (/^(2026[-/])?10$/.test(month) || month.startsWith('oct') || month.startsWith('2026-10')) return 'Oct';
+  if (/^(2026[-/])?11$/.test(month) || month.startsWith('nov') || month.startsWith('2026-11')) return 'Nov';
+  if (/^(2026[-/])?12$/.test(month) || month.startsWith('dec') || month.startsWith('2026-12')) return 'Dec';
+  return month ? null : null;
 }
 function mapApprovedSpend(rows) {
   // Spend claims are NOT actual spend until MKT status is Approved
@@ -111,7 +127,7 @@ function mapApprovedSpend(rows) {
   ).map(row=>({
     id:str(cell(row,0)),channel:str(cell(row,4))==='Shared'?'Shared':str(cell(row,3)),
     attribution:str(cell(row,4)),workstream:str(cell(row,5)),
-    month:str(cell(row,2)),amount:num(cell(row,15)),currency:'USD',
+    month:expenseMonth(cell(row,2)),amount:num(cell(row,15)),currency:'USD',
     approver:cell(row,16),approvalDate:cell(row,17),
     activityId:str(cell(row,6))
   }));
