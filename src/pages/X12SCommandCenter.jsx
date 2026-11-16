@@ -41,15 +41,29 @@ export default function X12SCommandCenter(){
     return EMPTY;
   });
   const [liveStatus,setLiveStatus]=useState('local');
+  const [auth,setAuth]=useState({loading:true,authenticated:false,email:null});
   const [tab,setTab]=useState('overall');
   const [channel,setChannel]=useState('MH');
   const [error,setError]=useState('');
   const [editing,setEditing]=useState(false);
   const [draft,setDraft]=useState({month:'November',channel:'MH',value:'',owner:'',asOf:''});
+  // Entra session is verified on the API, never trusted from frontend state alone.
+  useEffect(()=>{
+    let mounted=true;
+    fetch('/api/auth/me',{credentials:'same-origin',cache:'no-store'})
+      .then(async response=>{
+        if(!mounted)return;
+        if(!response.ok){setAuth({loading:false,authenticated:false,email:null});return;}
+        const profile=await response.json();
+        setAuth({loading:false,authenticated:Boolean(profile.authenticated),email:profile.email||null});
+      }).catch(()=>{if(mounted)setAuth({loading:false,authenticated:false,email:null});});
+    return()=>{mounted=false};
+  },[]);
   // Confidential business data is held in memory only; not persisted in browser storage.
   // Protected read-only sync. API returns 503 until workload identity and server
   // access controls are configured; never convert missing responses into zero.
   useEffect(()=>{
+    if(!auth.authenticated)return;
     let active=true;
     async function refresh(){
       try{
@@ -65,7 +79,7 @@ export default function X12SCommandCenter(){
     refresh();
     const interval=setInterval(refresh,5*60*1000);
     return()=>{active=false;clearInterval(interval);};
-  },[]);
+  },[auth.authenticated]);
 
   const reported=allConfirmedSO(data,'October'), nov=allConfirmedSO(data,'November');
   // Target gap below is DOCUMENTED-only, never labeled current confirmed remaining target.
@@ -84,6 +98,8 @@ export default function X12SCommandCenter(){
   const exportJSON=()=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download='X12S_private_data_export.json';a.click();URL.revokeObjectURL(u)};
   const saveSales=()=>{if(liveStatus==='live'){setError('Live data is read-only. Update the authorized Google Sheets instead.');return;}const n=draft.value.trim()===''?null:Number(draft.value);if(n!==null&&(!Number.isFinite(n)||n<0)){setError('SO must be a nonnegative number, or blank for unreported.');return;}setData(d=>({...d,so:{...d.so,[draft.month]:{...d.so[draft.month],[draft.channel]:n}},dataAsOf:draft.asOf||d.dataAsOf}));setEditing(false);setError('')};
 
+  if(auth.loading) return <div className="xauth-screen"><div className="xauth-panel"><h1>Israel X12S · Loading access</h1><p>Checking your company session…</p></div></div>;
+  if(!auth.authenticated) return <div className="xauth-screen"><div className="xauth-panel"><div className="xeyebrow">ECOVACS · ISRAEL · X12S</div><h1>Retail MKT Command Center</h1><p>Restricted to authorized ECOVACS Microsoft 365 accounts.</p><p>View overall performance and freely switch MH / ALM / KSP. Data remains read-only.</p><a className="xbutton" href="/api/auth/login">Sign in with Microsoft 365</a>{new URLSearchParams(window.location.search).has('login_error')&&<p className="xauth-warning">Sign-in could not be completed. Confirm that your company account is on the approved list, or contact the dashboard owner.</p>}</div></div>;
   return <div className="x12s-app"><header className="xheader"><div className="xheader-inner"><div><div className="xeyebrow">ECOVACS · ISRAEL · X12S ONLY</div><h1>Retail Business & MKT Investment Command Center</h1><p>Business results → retail execution → marketing support → weekly decisions</p></div><div className="xheader-actions">{liveStatus==='live'?<span className="xbutton xbutton-light" aria-label="Protected live read-only mode">Protected live data · read-only</span>:<><label className="xbutton xbutton-light"><Upload size={15}/> Import private X12S data<input aria-label="Import X12S JSON" type="file" accept="application/json,.json" hidden onChange={importJSON}/></label><button className="xbutton xbutton-light" onClick={exportJSON}><Download size={15}/> Export updates</button></>}</div></div></header>
   <div className="xnav"><div className="xnav-inner">{[['overall','01 Overall · Plan vs Actual'],['channels','02 Retailer Deep Dive'],['decisions','03 Decisions & Actions']].map(([id,title])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{title}</button>)}<span className="xasof">Source as of: {dateLabel(data.dataAsOf)} · <b>{liveStatus==='live'?'Protected Sheets sync · refresh every 5 min':'Local preview · private sync not enabled'}</b></span></div></div>
   {error&&<div className="xerror" role="alert">{error}</div>}
