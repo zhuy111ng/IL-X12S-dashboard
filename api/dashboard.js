@@ -1,3 +1,5 @@
+import { getVercelOidcToken } from '@vercel/oidc';
+
 /**
  * Private X12S Sheets API (disabled until OIDC + Deployment Protection are configured).
  * Zero service-account private keys or business values in this public repository.
@@ -25,7 +27,7 @@ function assertEnvironment() {
   if (PRODUCTION_ONLY && process.env.VERCEL_ENV !== 'production') {
     throw new Error('X12S live sync is restricted to Vercel Production');
   }
-  const vars = ['GOOGLE_WIF_AUDIENCE','GOOGLE_SERVICE_ACCOUNT_EMAIL','X12S_MASTER_SHEET_ID','X12S_AGENCY_SHEET_ID','VERCEL_OIDC_TOKEN'];
+  const vars = ['GOOGLE_WIF_AUDIENCE','GOOGLE_SERVICE_ACCOUNT_EMAIL','X12S_MASTER_SHEET_ID','X12S_AGENCY_SHEET_ID'];
   const missing = vars.filter(key => !process.env[key]);
   if (missing.length) throw new Error('Missing server-side configuration: ' + missing.join(', '));
 }
@@ -39,15 +41,16 @@ async function responseJSON(url, init) {
   try { return JSON.parse(raw); } catch { throw new Error('Unexpected Google API response'); }
 }
 async function googleAccessToken() {
-  // VERCEL_OIDC_TOKEN is a runtime-injected system environment variable.
-  // Never create it manually in Vercel Settings and never store a static token.
-  // Requires Vercel OIDC issuance and Google Cloud workload identity federation.
+  // Fetch an ephemeral token from the official Vercel OIDC SDK, server-side.
+  // Do NOT set VERCEL_OIDC_TOKEN as a static project environment variable.
+  const oidcToken = await getVercelOidcToken();
+  if (!oidcToken) throw new Error('Vercel OIDC token issuance returned empty token');
   const form = new URLSearchParams({
     audience: process.env.GOOGLE_WIF_AUDIENCE,
     grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
     requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
     subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
-    subject_token: process.env.VERCEL_OIDC_TOKEN,
+    subject_token: oidcToken,
     scope: CLOUD_SCOPE
   });
   const sts = await responseJSON(GOOGLE_STS, {
