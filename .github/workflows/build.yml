@@ -4,8 +4,13 @@ name: X12S React Build Check
 on:
   push:
     branches:
+      - main
       - IL-X12S-dashboard
       - feature/x12s-private-sheets-api
+      - fix/vercel-oidc-runtime-token
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
