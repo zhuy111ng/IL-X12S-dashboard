@@ -61,21 +61,30 @@ async function sheetsBatchGet(token, spreadsheetId, ranges) {
   return (data.valueRanges||[]).map(v=>v.values||[]);
 }
 function mapSO(rows) {
-  const so = {October:{}, November:{}}, sources={};
+  const raw={October:{},November:{}},sources={};
   for (const row of rows.slice(1)) {
-    const ch = str(cell(row,0));
+    const ch=str(cell(row,0));
     if (!['MH','ALM','KSP','Other Offline','Online'].includes(ch)) continue;
-    so.October[ch]=num(cell(row,1));
-    so.November[ch]=num(cell(row,2));
+    raw.October[ch]=num(cell(row,1));
+    raw.November[ch]=num(cell(row,2));
     sources[ch]={asOf:cell(row,5),validation:cell(row,7)};
   }
-  const combine=(month)=>{
-    const a=so[month]['Other Offline'],b=so[month].Online;
-    // Only combine when both components are provided; unknown is not zero.
-    so[month]['Other / Online']=(a!==null&&b!==null)?a+b:null;
+  const so={October:{},November:{}};
+  for (const month of ['October','November']) {
+    // This four-channel result is the sole data used for totals and charts.
+    // Preserve offline/online detail separately to prevent double-counting.
+    for (const ch of ['MH','ALM','KSP']) so[month][ch]=raw[month][ch]??null;
+    const offline=raw[month]['Other Offline'];
+    const online=raw[month].Online;
+    so[month]['Other / Online']=
+      offline!==null&&offline!==undefined&&online!==null&&online!==undefined
+        ?offline+online:null;
+  }
+  const details={
+    October:{'Other Offline':raw.October['Other Offline']??null,Online:raw.October.Online??null},
+    November:{'Other Offline':raw.November['Other Offline']??null,Online:raw.November.Online??null}
   };
-  combine('October');combine('November');
-  return {so,sources};
+  return {so,sources,details};
 }
 function mapActivities(rows) {
   return rows.slice(1).filter(row=>str(cell(row,1)).toUpperCase()==='X12S').map(row=>{
@@ -129,7 +138,7 @@ export default async function handler(req,res) {
       dataAsOf:null, // Reporting as-of must come from sales / MKT, not API fetch timestamp.
       salesPeriod:'Launch period (dates to confirm)',
       target:700,targets:{MH:245,ALM:154,KSP:105,'Other / Online':196},
-      so:result.so,soSources:result.sources,
+      so:result.so,soSources:result.sources,soDetails:result.details,
       budgets:{months:{},streams:{},retailerLines:[],sharedLines:[]},
       activities:mapActivities(agency[0]||[]),
       actualSpend:mapApprovedSpend(agency[1]||[]),
