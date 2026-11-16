@@ -1,12 +1,13 @@
+import { readSession } from '../lib/x12sAuth.js';
 import { getVercelOidcToken } from '@vercel/oidc';
 
 /**
  * Private X12S Sheets API (disabled until OIDC + Deployment Protection are configured).
  * Zero service-account private keys or business values in this public repository.
  *
- * Deployment security: Vercel Authentication must protect ALL deployments.
- * This endpoint is for internal authorized Vercel team members only; it does not
- * provide separate Sales / MKT / Agency role-based authorisation.
+ * Enforces Microsoft Entra ID session and explicit email allowlist server-side.
+ * Keep existing Vercel Authentication while staging; only lift it after
+ * Entra end-to-end tests and a verified admin recovery route.
  */
 const GOOGLE_STS = 'https://sts.googleapis.com/v1/token';
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
@@ -139,6 +140,12 @@ export default async function handler(req,res) {
   res.setHeader('Cache-Control','private, no-store');
   res.setHeader('Vary','Cookie, Authorization');
   if(req.method!=='GET')return res.status(405).json({error:'Method not allowed'});
+  // Fail closed: never rely on the React login view as an API access boundary.
+  let viewer;
+  try { viewer=await readSession(req); } catch {
+    return res.status(503).json({error:'Authentication configuration unavailable'});
+  }
+  if(!viewer)return res.status(401).json({error:'Microsoft company sign-in required'});
   if(process.env.X12S_LIVE_SYNC_ENABLED!=='true'){
     return res.status(503).json({error:'Live data endpoint not enabled'});
   }
