@@ -38,17 +38,38 @@ const defaultIssue=(ch)=>ch==='ALM'?'Confirm retailer cooperation, BF promotion 
 
 export default function X12SCommandCenter(){
   const [data,setData]=useState(()=>{
-    try {const s=localStorage.getItem('x12s-preview-state');return s?JSON.parse(s):EMPTY;} catch {return EMPTY;}
+    return EMPTY;
   });
+  const [liveStatus,setLiveStatus]=useState('local');
   const [tab,setTab]=useState('overall');
   const [channel,setChannel]=useState('MH');
   const [error,setError]=useState('');
   const [editing,setEditing]=useState(false);
   const [draft,setDraft]=useState({month:'November',channel:'MH',value:'',owner:'',asOf:''});
-  useEffect(()=>{try{localStorage.setItem('x12s-preview-state',JSON.stringify(data))}catch{}},[data]);
+  // Confidential business data is held in memory only; not persisted in browser storage.
+  // Protected read-only sync. API returns 503 until workload identity and server
+  // access controls are configured; never convert missing responses into zero.
+  useEffect(()=>{
+    let active=true;
+    async function refresh(){
+      try{
+        const response=await fetch('/api/dashboard',{credentials:'same-origin',cache:'no-store'});
+        if(!response.ok){if(active)setLiveStatus('local');return;}
+        const payload=await response.json();
+        if(active&&payload?.model==='X12S'&&payload.source==='verified-private-google-sheets'){
+          setData(payload);
+          setLiveStatus('live');
+        }
+      }catch{if(active)setLiveStatus('local');}
+    }
+    refresh();
+    const interval=setInterval(refresh,5*60*1000);
+    return()=>{active=false;clearInterval(interval);};
+  },[]);
+
   const reported=allConfirmedSO(data,'October'), nov=allConfirmedSO(data,'November');
   // Target gap below is DOCUMENTED-only, never labeled current confirmed remaining target.
-  const known=total(['October','November'].flatMap(m=>Object.values(sMonth(data,m)).filter(hasNumber)));
+  const known=total(['October','November'].flatMap(m=>['MH','ALM','KSP','Other / Online'].map(ch=>confirmedSO(data,m,ch)).filter(hasNumber)));
   const gap=Math.max(0,(Number(data.target)||700)-known);
   const planMonths=['Oct','Nov','Dec'].map(m=>({name:m,plan:data.budgets?.months?.[m]??null, actual: (data.actualSpend||[]).filter(x=>x.month===m&&hasNumber(x.amount)).length?total(data.actualSpend.filter(x=>x.month===m&&hasNumber(x.amount)).map(x=>x.amount)):null}));
   const q4Total=total(Object.values(data.budgets?.months||{}));
@@ -61,10 +82,10 @@ export default function X12SCommandCenter(){
 
   const importJSON=async(e)=>{const file=e.target.files?.[0];if(!file)return;try{const payload=JSON.parse(await file.text());if(payload.model!=='X12S')throw new Error('This file is not marked X12S.');if(!payload.targets||!payload.so||!payload.budgets)throw new Error('Missing required data sections.');setData(payload);setError('');}catch(ex){setError(`Import failed: ${ex.message}`)}e.target.value=''};
   const exportJSON=()=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download='X12S_private_data_export.json';a.click();URL.revokeObjectURL(u)};
-  const saveSales=()=>{const n=draft.value.trim()===''?null:Number(draft.value);if(n!==null&&(!Number.isFinite(n)||n<0)){setError('SO must be a nonnegative number, or blank for unreported.');return;}setData(d=>({...d,so:{...d.so,[draft.month]:{...d.so[draft.month],[draft.channel]:n}},dataAsOf:draft.asOf||d.dataAsOf}));setEditing(false);setError('')};
+  const saveSales=()=>{if(liveStatus==='live'){setError('Live data is read-only. Update the authorized Google Sheets instead.');return;}const n=draft.value.trim()===''?null:Number(draft.value);if(n!==null&&(!Number.isFinite(n)||n<0)){setError('SO must be a nonnegative number, or blank for unreported.');return;}setData(d=>({...d,so:{...d.so,[draft.month]:{...d.so[draft.month],[draft.channel]:n}},dataAsOf:draft.asOf||d.dataAsOf}));setEditing(false);setError('')};
 
-  return <div className="x12s-app"><header className="xheader"><div className="xheader-inner"><div><div className="xeyebrow">ECOVACS · ISRAEL · X12S ONLY</div><h1>Retail Business & MKT Investment Command Center</h1><p>Business results → retail execution → marketing support → weekly decisions</p></div><div className="xheader-actions"><label className="xbutton xbutton-light"><Upload size={15}/> Import private X12S data<input aria-label="Import X12S JSON" type="file" accept="application/json,.json" hidden onChange={importJSON}/></label><button className="xbutton xbutton-light" onClick={exportJSON}><Download size={15}/> Export updates</button></div></div></header>
-  <div className="xnav"><div className="xnav-inner">{[['overall','01 Overall · Plan vs Actual'],['channels','02 Retailer Deep Dive'],['decisions','03 Decisions & Actions']].map(([id,title])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{title}</button>)}<span className="xasof">Source as of: {dateLabel(data.dataAsOf)} · <b>Local preview, not live sync</b></span></div></div>
+  return <div className="x12s-app"><header className="xheader"><div className="xheader-inner"><div><div className="xeyebrow">ECOVACS · ISRAEL · X12S ONLY</div><h1>Retail Business & MKT Investment Command Center</h1><p>Business results → retail execution → marketing support → weekly decisions</p></div><div className="xheader-actions">{liveStatus==='live'?<span className="xbutton xbutton-light" aria-label="Protected live read-only mode">Protected live data · read-only</span>:<><label className="xbutton xbutton-light"><Upload size={15}/> Import private X12S data<input aria-label="Import X12S JSON" type="file" accept="application/json,.json" hidden onChange={importJSON}/></label><button className="xbutton xbutton-light" onClick={exportJSON}><Download size={15}/> Export updates</button></>}</div></div></header>
+  <div className="xnav"><div className="xnav-inner">{[['overall','01 Overall · Plan vs Actual'],['channels','02 Retailer Deep Dive'],['decisions','03 Decisions & Actions']].map(([id,title])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{title}</button>)}<span className="xasof">Source as of: {dateLabel(data.dataAsOf)} · <b>{liveStatus==='live'?'Protected Sheets sync · refresh every 5 min':'Local preview · private sync not enabled'}</b></span></div></div>
   {error&&<div className="xerror" role="alert">{error}</div>}
   <main className="xmain">
   {tab==='overall'&&<><div className="xsection-title"><div><h2>01 · Launch performance vs plan</h2><p>X12S-only. Teal: confirmed October · Blue: November plan · Grey: not reported.</p></div><Chip>700-unit goal: launch period; exact end date to confirm</Chip></div>
@@ -85,7 +106,7 @@ export default function X12SCommandCenter(){
   {tab==='decisions'&&<><div className="xsection-title"><div><h2>03 · Diagnosis, ownership & next decisions</h2><p>Scale / Optimize / Fix Retail / Hold only when evidence supports the decision.</p></div><Chip tone="warning">Current recommendation: validate missing data</Chip></div>
     <div className="xcols xcols-3">{CHANNELS.map(ch=>{const d=decisionFor(data,ch);return <Panel key={ch} title={ch}><Chip tone={d.tone}>{d.name}</Chip><p className="xdiag">{d.reason}</p><ValueRow label="Launch target" value={`${data.targets[ch]} units`}/><ValueRow label="Oct SO" value={confirmedSO(data,'October',ch)===null?'Pending':`${integer(confirmedSO(data,'October',ch))} units`}/><ValueRow label="Nov SO" value={integer(confirmedSO(data,'November',ch))}/><ValueRow label="Exclusive MKT plan" value={money(getRetailerBudget(data,ch)||null)}/></Panel>})}</div>
     <Panel title="Cross-team weekly action register" sub="Do not bury issues in emails or chat threads"><table className="xtable"><thead><tr><th>Priority / issue</th><th>Responsible party</th><th>Next checkpoint</th><th>Status</th></tr></thead><tbody>{(data.issues||[]).length?(data.issues.map((issue,i)=><tr key={i}><td>{issue.issue}</td><td>{issue.owner||'Unassigned'}</td><td>{issue.due||'To confirm'}</td><td><Chip>{issue.status||'Open'}</Chip></td></tr>)):[['Confirm launch-period SO baseline','HQ / Local Sales'],['Validate CO-ADS spend allocation','MKT / Finance'],['Confirm X12S-specific POSM and Demo completion','Local Agency']].map(([title,owner],i)=><tr key={i}><td>{title}</td><td>{owner}</td><td>Next weekly review</td><td><Chip tone="warning">Pending</Chip></td></tr>)}</tbody></table></Panel>
-    <Panel title="Inputs & reporting controls" sub="Private local preview, not connected to live POS systems"><div className="xeditline"><p>For internal review, import the private X12S JSON file; edit SO using the form and export the updated dataset. To enable cross-device agency editing, implement authenticated backend / Google Sheets API sync; localStorage is single-browser only.</p><button className="xbutton" onClick={()=>setEditing(x=>!x)}>{editing?'Close editor':'Edit reported SO'}</button></div>{editing&&<div className="xeditform"><label>Month<select value={draft.month} onChange={e=>setDraft({...draft,month:e.target.value})}><option>October</option><option>November</option></select></label><label>Retailer<select value={draft.channel} onChange={e=>setDraft({...draft,channel:e.target.value})}>{[...CHANNELS,'Other / Online'].map(x=><option key={x}>{x}</option>)}</select></label><label>Confirmed units<input type="number" min="0" placeholder="Leave empty if not reported" value={draft.value} onChange={e=>setDraft({...draft,value:e.target.value})}/></label><label>Report as-of<input type="date" value={draft.asOf} onChange={e=>setDraft({...draft,asOf:e.target.value})}/></label><button className="xbutton" onClick={saveSales}>Save local preview</button></div>}</Panel>
+    <Panel title="Inputs & reporting controls" sub="Private local preview, not connected to live POS systems"><div className="xeditline"><p>For internal review, import the private X12S JSON file; edit SO using the form and export the updated dataset. To enable cross-device agency editing, implement authenticated backend / Google Sheets API sync; localStorage is single-browser only.</p>{liveStatus!=='live'&&<button className="xbutton" onClick={()=>setEditing(x=>!x)}>{editing?'Close editor':'Edit reported SO'}</button>}</div>{editing&&<div className="xeditform"><label>Month<select value={draft.month} onChange={e=>setDraft({...draft,month:e.target.value})}><option>October</option><option>November</option></select></label><label>Retailer<select value={draft.channel} onChange={e=>setDraft({...draft,channel:e.target.value})}>{[...CHANNELS,'Other / Online'].map(x=><option key={x}>{x}</option>)}</select></label><label>Confirmed units<input type="number" min="0" placeholder="Leave empty if not reported" value={draft.value} onChange={e=>setDraft({...draft,value:e.target.value})}/></label><label>Report as-of<input type="date" value={draft.asOf} onChange={e=>setDraft({...draft,asOf:e.target.value})}/></label><button className="xbutton" onClick={saveSales}>Save local preview</button></div>}</Panel>
   </>}
   </main><footer className="xfooter">Confidential X12S data — do not commit imported private JSON to public GitHub. Planned amounts ≠ actual spend; October SO ≠ November SO; reported photo coverage ≠ X12S POSM readiness.</footer></div>
 }
